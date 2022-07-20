@@ -55,20 +55,16 @@ class BasicBlock(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         identity = x
-        print('identity', identity.shape)
 
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
-        print('out1', out.shape)
 
         out = self.conv2(out)
         out = self.bn2(out)
-        print('out2', out.shape)
 
         if self.downsample is not None:
             identity = self.downsample(x)
-            print('identity_', identity.shape)
         out += identity
         out = self.relu(out)
 
