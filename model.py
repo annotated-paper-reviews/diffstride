@@ -4,6 +4,7 @@ from torch import Tensor
 from utils.pooling import DiffStride
 from typing import Optional, Callable, Type, Union, List 
 
+
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
     """3x3 convolution with padding"""
     return nn.Conv2d(
@@ -23,6 +24,36 @@ def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
 
+def shortcut_and_downsample(
+    in_planes: int, 
+    out_planes:int, 
+    stride: int, 
+    norm_layer: nn.Module, 
+    downsample_type: str, 
+    downsample_kwargs: dict) -> List[nn.Module, nn.Module]:
+
+    shortcut_conv = None 
+    downsample = nn.Identity()
+
+    if downsample_kwargs is None: 
+        downsample_kwargs = {}
+
+    if stride != 1 or in_planes != out_planes:
+        if downsample_type == "default":
+            shortcut_conv = nn.Sequential(
+                conv1x1(in_planes, out_planes, stride),
+                norm_layer(out_planes),
+            )
+        elif downsample_type == "diffstride": 
+            shortcut_conv = nn.Sequential(
+                conv1x1(in_planes, out_planes),
+                norm_layer(out_planes),
+            )
+            downsample = DiffStride(**downsample_kwargs)
+
+    return shortcut_conv, downsample
+
+
 class BasicBlock(nn.Module):
     expansion: int = 1
 
@@ -31,7 +62,8 @@ class BasicBlock(nn.Module):
         inplanes: int,
         planes: int,
         stride: int = 1,
-        downsample: Optional[nn.Module] = None,
+        downsample_type: str = "default",
+        downsample_kwargs: dict = None,
         groups: int = 1,
         base_width: int = 64,
         dilation: int = 1,
@@ -44,13 +76,17 @@ class BasicBlock(nn.Module):
             raise ValueError("BasicBlock only supports groups=1 and base_width=64")
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
-        # Both self.conv1 and self.downsample layers downsample the input when stride != 1
+        if downsample_type == "diffstride":
+            stride = 1
+
+        # Both self.conv1 and self.sub_conv layers downsample the input when stride != 1
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = norm_layer(planes)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
         self.bn2 = norm_layer(planes)
-        self.downsample = downsample
+        self.sub_conv, self.downsample = shortcut_and_downsample(
+            inplanes, planes, stride, norm_layer, downsample_type, downsample_kwargs)
         self.stride = stride
 
     def forward(self, x: Tensor) -> Tensor:
@@ -58,13 +94,16 @@ class BasicBlock(nn.Module):
 
         out = self.conv1(x)
         out = self.bn1(out)
+        out = self.downsample(out) # identity or diffstride
         out = self.relu(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
 
-        if self.downsample is not None:
-            identity = self.downsample(x)
+        if self.sub_conv is not None:
+            identity = self.sub_conv(identity)
+            identity = self.downsample(identity) # identity or diffstride
+
         out += identity
         out = self.relu(out)
 
@@ -85,7 +124,8 @@ class Bottleneck(nn.Module):
         inplanes: int,
         planes: int,
         stride: int = 1,
-        downsample: Optional[nn.Module] = None,
+        downsample_type: str = "default",
+        downsample_kwargs: dict = None,
         groups: int = 1,
         base_width: int = 64,
         dilation: int = 1,
@@ -94,8 +134,10 @@ class Bottleneck(nn.Module):
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
+        if downsample_type == "diffstride":
+            stride = 1
         width = int(planes * (base_width / 64.0)) * groups
-        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        # Both self.conv2 and self.sub_conv layers downsample the input when stride != 1
         self.conv1 = conv1x1(inplanes, width)
         self.bn1 = norm_layer(width)
         self.conv2 = conv3x3(width, width, stride, groups, dilation)
@@ -103,7 +145,8 @@ class Bottleneck(nn.Module):
         self.conv3 = conv1x1(width, planes * self.expansion)
         self.bn3 = norm_layer(planes * self.expansion)
         self.relu = nn.ReLU(inplace=True)
-        self.downsample = downsample
+        self.sub_conv, self.downsample = shortcut_and_downsample(
+            inplanes, planes * self.expansion, stride, norm_layer, downsample_type, downsample_kwargs)
         self.stride = stride
 
     def forward(self, x: Tensor) -> Tensor:
@@ -115,13 +158,15 @@ class Bottleneck(nn.Module):
 
         out = self.conv2(out)
         out = self.bn2(out)
+        out = self.downsample(out) # identity or diffstride
         out = self.relu(out)
 
         out = self.conv3(out)
         out = self.bn3(out)
 
-        if self.downsample is not None:
-            identity = self.downsample(x)
+        if self.sub_conv is not None:
+            identity = self.sub_conv(identity)
+            identity = self.downsample(identity) # identity or diffstride
 
         out += identity
         out = self.relu(out)
@@ -140,6 +185,8 @@ class ResNet(nn.Module):
         width_per_group: int = 64,
         replace_stride_with_dilation: Optional[List[bool]] = None,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
+        downsample_type: str = "default", 
+        downsample_kwargs: dict = None, 
     ) -> None:
         super().__init__()
         if norm_layer is None:
@@ -154,7 +201,7 @@ class ResNet(nn.Module):
             replace_stride_with_dilation = [False, False, False]
         if len(replace_stride_with_dilation) != 3:
             raise ValueError(
-                "replace_stride_with_dilation should be None "
+                f"replace_stride_with_dilation should be None "
                 f"or a 3-element tuple, got {replace_stride_with_dilation}"
             )
         self.groups = groups
@@ -163,10 +210,14 @@ class ResNet(nn.Module):
         self.bn1 = norm_layer(self.inplanes)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0])
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1])
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2])
+        self.layer1 = self._make_layer(block, 64, layers[0], 
+                                       downsample_type=downsample_type, downsample_kwargs=downsample_kwargs)
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], 
+                                       downsample_type=downsample_type, downsample_kwargs=downsample_kwargs)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], 
+                                       downsample_type=downsample_type, downsample_kwargs=downsample_kwargs)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], 
+                                       downsample_type=downsample_type, downsample_kwargs=downsample_kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
@@ -194,23 +245,21 @@ class ResNet(nn.Module):
         blocks: int,
         stride: int = 1,
         dilate: bool = False,
+        downsample_type: str = "default",
+        downsample_kwargs: dict = None,
     ) -> nn.Sequential:
         norm_layer = self._norm_layer
         downsample = None
+        sub_conv = None
         previous_dilation = self.dilation
         if dilate:
             self.dilation *= stride
             stride = 1
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                norm_layer(planes * block.expansion),
-            )
 
         layers = []
         layers.append(
             block(
-                self.inplanes, planes, stride, downsample, self.groups, self.base_width, previous_dilation, norm_layer
+                self.inplanes, planes, stride, downsample_type, downsample_kwargs, self.groups, self.base_width, previous_dilation, norm_layer
             )
         )
         self.inplanes = planes * block.expansion
@@ -219,6 +268,8 @@ class ResNet(nn.Module):
                 block(
                     self.inplanes,
                     planes,
+                    downsample_type=downsample_type, 
+                    downsample_kwargs=downsample_kwargs,
                     groups=self.groups,
                     base_width=self.base_width,
                     dilation=self.dilation,
@@ -252,6 +303,18 @@ class ResNet(nn.Module):
 
 if __name__ == "__main__":
     img = torch.randn([1,3,228,228])
-    model = ResNet(BasicBlock, [2, 2, 2, 2]) #resnet18
-    y = model(img)
-    print(model)
+
+    model_config = {
+        "resnet18" : [BasicBlock, [2, 2, 2, 2]],
+        "resnet34" : [BasicBlock, [3, 4, 6, 3]],
+        "resnet50" : [Bottleneck, [3, 4, 6, 3]],
+        "resnet101" : [Bottleneck, [3, 4, 23, 3]],
+        "resnet152" : [Bottleneck, [3, 8, 36, 3]],
+    }
+    downsample_options = ["default", "diffstride"]
+
+    for k, v in model_config.items():
+        for downsample in downsample_options:
+            model = ResNet(*v, downsample_type=downsample)
+            y = model(img)
+            print(k, downsample, y.shape)
