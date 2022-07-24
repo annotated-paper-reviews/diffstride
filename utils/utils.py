@@ -16,6 +16,15 @@ class ActivationStorage:
                 module.register_forward_hook(self.hook)
             
 
+class GradStorage:
+    def __init__(self):
+        self.data = defaultdict(list)
+        
+    def gather_grads(self, model):
+        for name, param in model.named_parameters():
+            self.data[name].append(param.grad)
+
+
 if __name__ == "__main__":
     import torch
     import torch.nn as nn
@@ -36,7 +45,7 @@ if __name__ == "__main__":
     
     model = Model()
 
-    # attaching hooks
+    # attaching hooks for activation
     activation_storage = ActivationStorage()
     activation_storage.register_activation_hooks(model)
 
@@ -44,8 +53,20 @@ if __name__ == "__main__":
     for _ in range(3):
         dummy_input = torch.randn((2, 1024))
         y = model(dummy_input)
-    
-    # checking output
+        
+    # executing backward pass
+    y.sum().backward()
+
+    # gather grads
+    grad_storage = GradStorage()
+    grad_storage.gather_grads(model)
+
+    # checking stored activation
     for k, v in activation_storage.data.items():
         print(k)
         print(f'\t{len(v)} activations stored with the shape of {v[0].shape}')
+
+    # checking stored gradients
+    for k, v in grad_storage.data.items():
+        print(k)
+        print(f'\t{len(v)} grads stored with the shape of {v[0].shape}')

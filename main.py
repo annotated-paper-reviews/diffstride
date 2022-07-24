@@ -34,10 +34,11 @@ class Arguments:
     batch_size: int = field(default=128,)
     epochs: int = field(default=8,)
     log_step: int = field(default=500,)
+    log_path: str = field(default='./runs')
     data_path: str = field(default='./data',)
     learning_rate: float = field(default=0.001,)
     momentum: float = field(default=0.9,)
-    #num_blocks: List[int] = field(default_factory=[2,2,2,2],)
+    #num_blocks: List[int] = field(default=[2,2,2,2],)
 
 
 def evaluate(model, dataloader):
@@ -65,6 +66,9 @@ def main():
     parser = ArgumentParser(Arguments)
     args = parser.parse_args([])
     
+    # logger
+    writer = SummaryWriter(args.log_path)
+
     # data
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -93,6 +97,7 @@ def main():
     # model, loss, optimizer
     model = ResNet(BasicBlock, [2,2,2,2]) #resnet18
     model.to(device)
+    writer.add_graph(model, torch.randn([1,3,32,32]).to(device))
     print("*"*50)
     print('Model initialized')
     print("*"*50)
@@ -125,7 +130,12 @@ def main():
             # print statistics
             running_loss += loss.item()
             if step % args.log_step == args.log_step - 1:
-                print(f'[{epoch + 1}, {step + 1:5d}] loss: {running_loss / 2000:.3f}')
+                print(f'[{epoch + 1}, {step + 1:5d}] loss: {running_loss / args.log_step:.3f}')
+                writer.add_scalar(
+                    'training loss',
+                    running_loss / args.log_step,
+                    step
+                )
                 running_loss = 0.0       
             step += 1
     
