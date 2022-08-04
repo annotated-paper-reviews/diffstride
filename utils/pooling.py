@@ -69,6 +69,44 @@ class DiffStride(nn.Module):
         return result
 
 
+class DiffStride1d(nn.Module):
+
+    def __init__(self,
+                stride: float = 2.0,
+                smoothness_factor: float = 4.0,
+                cropping: bool = True):
+        super().__init__()
+        self.cropping = cropping
+        self.smoothness_factor = smoothness_factor
+        self.stride = nn.Parameter(torch.tensor(stride))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, num_channels, length = x.size()
+
+        time_positions = torch.arange(length // 2 + 1, dtype=torch.float, device=x.device)
+        # This clipping by .assign is performed to allow gradient to flow,
+        # even when the stride becomes too small, i.e. close to 1.
+        min_time_stride = length / (length - self.smoothness_factor)
+        
+        time_stride = max(self.stride, min_time_stride)
+
+        strided_time = length / time_stride
+        strided_time = max(strided_time, 2.0)
+        upper_time = strided_time / 2.0 + 1.0
+
+        f_x = torch.fft.rfft(x)
+        time_mask = compute_adaptive_span_mask(
+            upper_time, self.smoothness_factor, time_positions)
+
+        output = f_x * time_mask[None, None, :]
+        if self.cropping:
+            time_to_keep = torch.where(time_mask.type(torch.float) > 0.)[0]
+            output = output[:, :, time_to_keep]
+        result = torch.fft.irfft(output) 
+
+        return result
+
+
 if __name__ == "__main__":
     import urllib.request
     import torchvision
