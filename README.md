@@ -7,3 +7,4 @@ TODO
 ## Reference 
 * https://github.com/google-research/diffstride 
 * https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py
+* https://github.com/akamaster/pytorch_resnet_cifar10
