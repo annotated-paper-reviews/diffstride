@@ -15,23 +15,23 @@ def compute_adaptive_span_mask(threshold: torch.float,
 class DiffStride(nn.Module):
 
     def __init__(self,
-                strides: List = [2.3, 1.7],
+                strides: List = [2.0, 2.0],
                 smoothness_factor: float = 4.0,
                 cropping: bool = True,
                 lower_limit_stride: Optional[float] = None,
                 upper_limit_stride: Optional[float] = None):
         super().__init__()
         self.cropping = cropping
-        self.smoothness_factor = smoothness_factor
         self.lower_limit_stride = lower_limit_stride
         self.upper_limit_stride = upper_limit_stride
         self.strides = nn.Parameter(torch.tensor(strides))
+        self.smoothness_factor = nn.Parameter(torch.tensor(smoothness_factor))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, channels, height, width = x.size()
 
-        horizontal_positions = torch.arange(width // 2 + 1, dtype=torch.float)
-        vertical_positions = torch.arange(height // 2 + height % 2, dtype=torch.float)
+        horizontal_positions = torch.arange(width // 2 + 1, dtype=torch.float, device=x.device)
+        vertical_positions = torch.arange(height // 2 + height % 2, dtype=torch.float, device=x.device)
         vertical_positions = torch.cat(
             [torch.flip(vertical_positions[(height % 2):],dims=(0,)), vertical_positions], 
             axis=0)
